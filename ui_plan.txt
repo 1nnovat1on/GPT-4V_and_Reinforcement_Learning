@@ -1,0 +1,9 @@
+Current Episode / Total Elapsed
+Current Episode / Current Run Elapsed
+Accuracy % / Success/Total Attempts
+Current Runtime / Total Run Time
+
+Time Going Down in Episode
+Current Action
+Total Number of Actions in Current Episode
+Status like Success/Failure/Saving Model/Paused etc.
