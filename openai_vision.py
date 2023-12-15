@@ -10,6 +10,8 @@ import os
 import base64
 import requests
 from typing import Tuple
+import aiohttp
+import asyncio
 
 api_key = os.getenv('OPENAI_API_KEY')
 
@@ -30,7 +32,6 @@ def take_screenshot():
     screenshot.save(filename)
 
     print(f"Screenshot saved as {filename}")
-
 
 
 
@@ -130,3 +131,47 @@ def encode_image(image_path: str) -> str:
         return base64.b64encode(image_file.read()).decode('utf-8')
 
 
+
+
+async def see_computer_screen_async() -> Tuple[bool, str]:
+    try:
+        # Take a screenshot (this part needs to be adapted if it's IO-bound)
+        take_screenshot()
+
+        image_path = find_most_recent_image('images')
+        if not image_path:
+            return False, "No images found in the 'images/' directory."
+
+        base64_image = encode_image(image_path)
+
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}"
+        }
+        payload = {
+            "model": "gpt-4-vision-preview",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "What’s in this image?"},
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
+                    ]
+                }
+            ],
+            "max_tokens": 300
+        }
+
+        # Asynchronous HTTP request
+        async with aiohttp.ClientSession() as session:
+            async with session.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload) as response:
+                response_data = await response.json()
+
+        # Delete the screenshot after analysis
+        os.remove(image_path)
+
+        return True, response_data
+    except Exception as e:
+        if image_path:
+            os.remove(image_path)
+        return False, f"An error occurred: {e}"

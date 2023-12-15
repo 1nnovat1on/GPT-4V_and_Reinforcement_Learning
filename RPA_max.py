@@ -5,15 +5,12 @@ from keras.models import Sequential
 from keras.layers import Dense
 from keras.optimizers import Adam
 from keras.preprocessing.text import one_hot
-from keras.preprocessing.sequence import pad_sequences
+from keras_preprocessing.sequence import pad_sequences
 import random
 import time
 import openai_vision as eye
-
-
-# For text embedding
-
-max_length = 10
+import asyncio
+import queue
 
 # Initialize Pygame and create a screen
 pygame.init()
@@ -27,6 +24,19 @@ model_path = 'model.h5'
 success_path = 'successes.txt'
 attempts_path = 'attempts.txt'
 epsilon_path = 'epsilon.txt'
+
+# shared resources (Public)
+vision_data_queue = queue.Queue()
+time_limit = 5
+
+# For text embedding
+max_length = 10
+
+# Initialize ε (epsilon) parameters
+epsilon_min = 0.01  # Minimum value of ε
+epsilon_decay = 0.995  # Decay rate of ε per episode
+
+
 
 
 
@@ -64,7 +74,7 @@ def initialize_model(model_path):
         model = Sequential([
             Dense(64, activation='relu', input_shape=input_shape),
             Dense(32, activation='relu'),
-            Dense(4, activation='softmax')
+            Dense(5, activation='softmax')
         ])
         model.compile(optimizer=Adam(learning_rate=0.001), loss='mse')
         
@@ -79,10 +89,13 @@ def initialize_model(model_path):
         print("New model created.")
         return model
 
+def get_state(target, agent, default_vision_data_length=10):
+    basic_state = np.array([target[0] - agent[0], target[1] - agent[1]])
+    # Initialize vision data with zeros
+    vision_data = np.zeros(default_vision_data_length)
+    extended_state = np.concatenate((basic_state, vision_data))
+    return extended_state
 
-# Define a function to get the state
-def get_state(target, agent):
-    return np.array([target[0] - agent[0], target[1] - agent[1]])
 
 # Define a function to train the model
 def train_model(state, action, reward, next_state, done, model):
@@ -93,74 +106,140 @@ def train_model(state, action, reward, next_state, done, model):
     target_f[0][action] = target
     model.fit(state.reshape(1, -1), target_f, epochs=1, verbose=0)
 
-def process_description(description, state, vocab_size=10000, max_length=10):
-    """
-    Process the description to be used in the model.
+def train_model_minibatch(states, actions, rewards, next_states, dones, model):
+  """
+  Trains the neural network model on a minibatch of states, actions, rewards, 
+  next states, and done flags.
 
-    :param description: The description string.
-    :param state: The current state of the agent.
-    :param vocab_size: Size of the vocabulary for encoding.
-    :param max_length: Maximum length of the encoded vector.
-    :return: Combined state and encoded description.
-    """
+  Args:
+    states: A list of current states.
+    actions: A list of chosen actions.
+    rewards: A list of received rewards.
+    next_states: A list of next states.
+    dones: A list of done flags indicating episode completion.
+    model: The neural network model to be trained.
+
+  Returns:
+    None
+  """
+
+  # Define minibatch size
+  minibatch_size = 32  # Adjust this based on memory constraints and model size
+
+  # Loop through batches in the buffer
+  for i in range(0, len(states), minibatch_size):
+    # Extract minibatch slices
+    batch_states = states[i:i+minibatch_size]
+    batch_actions = actions[i:i+minibatch_size]
+    batch_rewards = rewards[i:i+minibatch_size]
+    batch_next_states = next_states[i:i+minibatch_size]
+    batch_dones = dones[i:i+minibatch_size]
+
+    # Calculate target values for each state in the minibatch
+    batch_targets = []
+    for j in range(minibatch_size):
+      if not batch_dones[j]:
+        batch_targets.append(batch_rewards[j] + 0.99 * np.amax(model.predict(batch_next_states[j].reshape(1, -1))[0]))
+      else:
+        batch_targets.append(batch_rewards[j])
+
+    # Convert targets to a NumPy array
+    batch_targets = np.array(batch_targets)
+
+    # Calculate and update the model parameters
+    target_f = model.predict(batch_states)
+    target_f[np.arange(minibatch_size), batch_actions] = batch_targets
+    model.fit(batch_states, target_f, epochs=1, verbose=0)
+
+
+
+def process_description(description, basic_state, vocab_size=10000, max_length=10):
     # Encode the description using one-hot encoding
     encoded = one_hot(description, vocab_size)
     # Pad the encoded description
     padded = pad_sequences([encoded], maxlen=max_length, padding='post')
     # Flatten the padded description
-    flattened = padded.flatten()
+    vision_data = padded.flatten()
 
-    # Append the flattened description to the state
-    extended_state = np.append(state, flattened)
+    # Combine basic state with vision data
+    extended_state = np.concatenate((basic_state[:2], vision_data))
 
     return extended_state
 
+def extract_description(response):
+    """
+    Extract the descriptive text about the image from the response.
 
-def choose_action_and_update_position(state, agent, epsilon, model):
+    :param response: The response dictionary from see_computer_screen.
+    :return: The extracted description as a string.
+    """
+    try:
+        # Access the 'content' field of the 'message' in the first 'choices' element
+        description = response['choices'][0]['message']['content']
+        return description.strip()  # Remove any leading/trailing whitespace
+    except (KeyError, IndexError, TypeError):
+        # Return a default message or handle the error as appropriate
+        return "Description not available."
+    
+async def async_screen_reading():
+    while True:
+        # Asynchronous screen reading logic
+        success, description = await eye.see_computer_screen_async()  # This should be an async call
+        if success:
+            vision_data_queue.put_nowait((description, time.time()))  # Non-blocking put
+        await asyncio.sleep(0.1)  # Adjust frequency as needed
+
+def update_agent_position(agent, action, step_size):
+    if action == 0:  # Up
+        return agent[0], agent[1] - step_size
+    elif action == 1:  # Down
+        return agent[0], agent[1] + step_size
+    elif action == 2:  # Left
+        return agent[0] - step_size, agent[1]
+    elif action == 3:  # Right
+        return agent[0] + step_size, agent[1]
+    else:
+        return agent  # No change in position if action is "seeing" or any other undefined action
+
+async def choose_action_and_update_position(state, agent, epsilon, model, vision_data_queue):
     """
     Choose an action based on ε-greedy strategy and update the agent's position.
 
+    :param state: Current state of the agent.
+    :param agent: Current position of the agent.
     :param epsilon: Exploration rate.
+    :param model: Trained model for decision making.
+    :param vision_data_queue: Queue containing vision data.
     """
     step_size = 5  # Define the step size for each movement
     action_taken = True
 
+    basic_state = np.array([state[0] - agent[0], state[1] - agent[1]])
+
     if np.random.rand() <= epsilon:
-        # Take a random action
-        action = np.random.randint(0, 5)
+        action = np.random.randint(0, 5)  # Include "seeing" action
     else:
-        # Take the best action according to the model
-        action = np.argmax(model.predict(state.reshape(1, -1)))
+        extended_state = np.concatenate((basic_state, np.zeros(10)))  # Default state with zeros
+        extended_state = extended_state.reshape(1, -1)
+        action = np.argmax(model.predict(extended_state))
 
-    # Update agent's position based on the chosen action
-    if action == 0:  # Up
-        new_agent_pos = agent[0], agent[1] - step_size
-    elif action == 1:  # Down
-        new_agent_pos = agent[0], agent[1] + step_size
-    elif action == 2:  # Left
-        new_agent_pos = agent[0] - step_size, agent[1]
-    elif action == 3:  # Right
-        new_agent_pos = agent[0] + step_size, agent[1]
-    # Incorporate the visual analysis into the decision-making process
-    elif action == 4:  # If the action is to see
-        success, description = eye.see_computer_screen()
+    if action == 4:  # If the action is to see
+        success, response = await eye.see_computer_screen_async()
         if success:
-            # Process the description to influence the decision
-            # For example, modify the state with the new information
-            state_with_vision_info = process_description(description, state)
-            # Use the updated state for the next decision
-            action = np.argmax(model.predict(state_with_vision_info.reshape(1, -1)))
+            description = extract_description(response)
+            # Use only the first 2 elements of the basic state
+            basic_state = np.array([state[0], state[1]])
+            state_with_vision_info = process_description(description, basic_state)
+            state_with_vision_info = state_with_vision_info.reshape(1, -1)
+            action = np.argmax(model.predict(state_with_vision_info))
         else:
-            # Handle failure to get a description
-            # You could choose a default action or use the original state
-            action = np.argmax(model.predict(state.reshape(1, -1)))
+            action = np.argmax(model.predict(extended_state))  # Fallback
     else:
-        new_agent_pos = agent
-        action_taken = False
+        new_agent_pos = update_agent_position(agent, action, step_size)  # Handling other actions
+        return action, new_agent_pos, action_taken
 
+    new_agent_pos = update_agent_position(agent, action, step_size)  # Update position after "seeing"
     return action, new_agent_pos, action_taken
-
-
 
 
 
@@ -198,21 +277,19 @@ def calculate_reward(target, agent, time_remaining, success_threshold, width, su
 
     return reward, successes, done
 
-def main():
-
+async def main():
+    
     model = initialize_model(model_path)
 
     # Main loop
     running = True
-    time_limit = 5  # Time limit of 5 seconds
     successes = int(load_file(success_path, 0))  # Load the number of successes
     attempts = int(load_file(attempts_path, 0))  # Load the total number of attempts
     epsilon = float(load_file(epsilon_path, default_value=1.0)) # Load ε at the start
 
-    # Initialize ε parameters
-    epsilon_min = 0.01  # Minimum value of ε
-    epsilon_decay = 0.995  # Decay rate of ε per episode
 
+    # Start the async screen reading task
+    #asyncio.create_task(async_screen_reading())
 
     while running:
         attempts += 1  # Increment attempts counter
@@ -244,8 +321,9 @@ def main():
 
             
             # Update agent's position based on chosen action
-            action, agent, action_taken = choose_action_and_update_position(state, agent, epsilon, model)
-
+            # action, agent, action_taken = choose_action_and_update_position(state, agent, epsilon, model)
+            action, agent, action_taken = await choose_action_and_update_position(state, agent, epsilon, model, vision_data_queue)
+            
             next_state = get_state(target, agent)
 
             # Calculate reward and check if the episode is done
@@ -284,3 +362,5 @@ def main():
 
     # Quit Pygame
     pygame.quit()
+
+asyncio.run(main())
