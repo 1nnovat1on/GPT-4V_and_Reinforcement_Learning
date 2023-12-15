@@ -26,7 +26,8 @@ attempts_path = 'attempts.txt'
 epsilon_path = 'epsilon.txt'
 
 # shared resources (Public)
-vision_data_queue = queue.Queue()
+# Create an asyncio Queue for vision data
+vision_data_queue = asyncio.Queue()
 time_limit = 5
 
 # For text embedding
@@ -153,7 +154,7 @@ def train_model_minibatch(states, actions, rewards, next_states, dones, model):
 
 
 
-def process_description(description, basic_state, vocab_size=10000, max_length=10):
+def process_description(description, vocab_size=10000, max_length=10):
     # Encode the description using one-hot encoding
     encoded = one_hot(description, vocab_size)
     # Pad the encoded description
@@ -161,10 +162,7 @@ def process_description(description, basic_state, vocab_size=10000, max_length=1
     # Flatten the padded description
     vision_data = padded.flatten()
 
-    # Combine basic state with vision data
-    extended_state = np.concatenate((basic_state[:2], vision_data))
-
-    return extended_state
+    return vision_data
 
 def extract_description(response):
     """
@@ -181,21 +179,16 @@ def extract_description(response):
         # Return a default message or handle the error as appropriate
         return "Description not available."
     
-async def async_screen_reading():
+
+
+async def vision_data_fetcher(vision_data_queue):
     while True:
         # Asynchronous screen reading logic
-        success, description = await eye.see_computer_screen_async()  # This should be an async call
-        if success:
-            vision_data_queue.put_nowait((description, time.time()))  # Non-blocking put
-        await asyncio.sleep(0.1)  # Adjust frequency as needed
+        success, description = await eye.see_computer_screen_async()
 
-async def fetch_vision_data(shared_state):
-    while True:
-        success, response = await eye.see_computer_screen_async()
         if success:
-            shared_state['data'] = extract_description(response)
-            shared_state['updated'] = True
-        await asyncio.sleep(0.1)  # Adjust as needed
+            await vision_data_queue.put(description)
+        await asyncio.sleep(0.1)  # Adjust frequency as needed
 
 def update_agent_position(agent, action, step_size):
     if action == 0:  # Up
@@ -214,6 +207,9 @@ async def choose_action_and_update_position(state, agent, epsilon, model, shared
     action_taken = True
 
     basic_state = np.array([state[0] - agent[0], state[1] - agent[1]])
+    # Define extended_state with default values before the try-except block
+    extended_state = np.concatenate((basic_state, np.zeros(10)))  # Default state with zeros
+    extended_state = extended_state.reshape(1, -1)
 
     if np.random.rand() <= epsilon:
         action = np.random.randint(0, 5)
@@ -223,13 +219,14 @@ async def choose_action_and_update_position(state, agent, epsilon, model, shared
         action = np.argmax(model.predict(extended_state))
 
     if action == 4:  # "Seeing" action
-        if shared_state.get('updated', False):
-            description = shared_state['data']
-            state_with_vision_info = process_description(description, basic_state[:2])
+        try:
+            # Try to get description from the queue without blocking
+            description = vision_data_queue.get_nowait()
+            vision_data = process_description(description)
+            state_with_vision_info = np.concatenate((basic_state, vision_data))
             state_with_vision_info = state_with_vision_info.reshape(1, -1)
             action = np.argmax(model.predict(state_with_vision_info))
-            shared_state['updated'] = False
-        else:
+        except asyncio.queues.QueueEmpty:
             action = np.argmax(model.predict(extended_state))  # Fallback
     else:
         new_agent_pos = update_agent_position(agent, action, step_size)
@@ -275,6 +272,8 @@ def calculate_reward(target, agent, time_remaining, success_threshold, width, su
     return reward, successes, done
 
 async def main():
+    # Initialize shared state with default values
+    fetcher_task = asyncio.create_task(vision_data_fetcher(vision_data_queue))
     
     model = initialize_model(model_path)
 
@@ -284,9 +283,9 @@ async def main():
     attempts = int(load_file(attempts_path, 0))  # Load the total number of attempts
     epsilon = float(load_file(epsilon_path, default_value=1.0)) # Load ε at the start
 
-
-    # Start the async screen reading task
-    #asyncio.create_task(async_screen_reading())
+    # At the start of your main loop, initialize a list to keep track of rewards
+    reward_history = []
+    running_average_reward = 0
 
     while running:
         attempts += 1  # Increment attempts counter
@@ -334,7 +333,8 @@ async def main():
             screen.blit(success_ratio_text, (10, height - 30))
 
             pygame.display.flip()
-            clock.tick(60)
+            #clock.tick(60)
+            await asyncio.sleep(1/60)
             
             # Process Pygame events
             for event in pygame.event.get():
@@ -342,9 +342,17 @@ async def main():
                     running = False
                     done = True
             
+            
+            # After updating the reward within your loop, append to reward_history and calculate running average
+            reward_history.append(reward)
+            if len(reward_history) > 100:
+                reward_history = reward_history[1:]  # Keep only the last 100 rewards
+            running_average_reward = np.mean(reward_history)
+            print(f"Running Average Reward: {running_average_reward}")
             # If the episode is done (either success or failure), train the model
             if done:
                 train_model(state, action, reward, next_state, done, model)
+
 
         
         # Update ε after each episode
@@ -359,5 +367,7 @@ async def main():
 
     # Quit Pygame
     pygame.quit()
+    fetcher_task.cancel()
 
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())

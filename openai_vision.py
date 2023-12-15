@@ -167,10 +167,13 @@ async def see_computer_screen_async() -> Tuple[bool, str]:
             async with session.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload) as response:
                 response_data = await response.json()
 
+                # Extract the description text from the response
+        description_text = response_data['choices'][0]['message']['content']
+
         # Delete the screenshot after analysis
         os.remove(image_path)
 
-        return True, response_data
+        return True, description_text
     except Exception as e:
         if image_path:
             os.remove(image_path)
