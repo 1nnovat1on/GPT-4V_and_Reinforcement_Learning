@@ -189,6 +189,14 @@ async def async_screen_reading():
             vision_data_queue.put_nowait((description, time.time()))  # Non-blocking put
         await asyncio.sleep(0.1)  # Adjust frequency as needed
 
+async def fetch_vision_data(shared_state):
+    while True:
+        success, response = await eye.see_computer_screen_async()
+        if success:
+            shared_state['data'] = extract_description(response)
+            shared_state['updated'] = True
+        await asyncio.sleep(0.1)  # Adjust as needed
+
 def update_agent_position(agent, action, step_size):
     if action == 0:  # Up
         return agent[0], agent[1] - step_size
@@ -201,44 +209,33 @@ def update_agent_position(agent, action, step_size):
     else:
         return agent  # No change in position if action is "seeing" or any other undefined action
 
-async def choose_action_and_update_position(state, agent, epsilon, model, vision_data_queue):
-    """
-    Choose an action based on ε-greedy strategy and update the agent's position.
-
-    :param state: Current state of the agent.
-    :param agent: Current position of the agent.
-    :param epsilon: Exploration rate.
-    :param model: Trained model for decision making.
-    :param vision_data_queue: Queue containing vision data.
-    """
-    step_size = 5  # Define the step size for each movement
+async def choose_action_and_update_position(state, agent, epsilon, model, shared_state):
+    step_size = 5
     action_taken = True
 
     basic_state = np.array([state[0] - agent[0], state[1] - agent[1]])
 
     if np.random.rand() <= epsilon:
-        action = np.random.randint(0, 5)  # Include "seeing" action
+        action = np.random.randint(0, 5)
     else:
-        extended_state = np.concatenate((basic_state, np.zeros(10)))  # Default state with zeros
+        extended_state = np.concatenate((basic_state, np.zeros(10)))
         extended_state = extended_state.reshape(1, -1)
         action = np.argmax(model.predict(extended_state))
 
-    if action == 4:  # If the action is to see
-        success, response = await eye.see_computer_screen_async()
-        if success:
-            description = extract_description(response)
-            # Use only the first 2 elements of the basic state
-            basic_state = np.array([state[0], state[1]])
-            state_with_vision_info = process_description(description, basic_state)
+    if action == 4:  # "Seeing" action
+        if shared_state.get('updated', False):
+            description = shared_state['data']
+            state_with_vision_info = process_description(description, basic_state[:2])
             state_with_vision_info = state_with_vision_info.reshape(1, -1)
             action = np.argmax(model.predict(state_with_vision_info))
+            shared_state['updated'] = False
         else:
             action = np.argmax(model.predict(extended_state))  # Fallback
     else:
-        new_agent_pos = update_agent_position(agent, action, step_size)  # Handling other actions
+        new_agent_pos = update_agent_position(agent, action, step_size)
         return action, new_agent_pos, action_taken
 
-    new_agent_pos = update_agent_position(agent, action, step_size)  # Update position after "seeing"
+    new_agent_pos = update_agent_position(agent, action, step_size)
     return action, new_agent_pos, action_taken
 
 
