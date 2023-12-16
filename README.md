@@ -67,8 +67,8 @@ Contributions to this project are welcome. Please fork the repository and submit
 ## Authors
 
 Your Name  
-Contact: [Your Email](mailto:colinjackson97@icloud.com)  
-GitHub: [Your GitHub Profile](https://github.com/1nnovat1on)
+Contact: [colinjackson97@icloud.com](mailto:colinjackson97@icloud.com)  
+GitHub: [1nnovat1on](https://github.com/1nnovat1on)
 
 ## License
 
