@@ -28,7 +28,7 @@ Ensure you have Python 3.x installed on your machine. This project depends on se
 Clone the repository to your local machine:
 
 \```bash
-git clone [https://github.com/your-github-username/your-repo-name.git](https://github.com/1nnovat1on/GPT-4V_and_Reinforcement_Learning.git)
+git clone [https://github.com/1nnovat1on/GPT-4V_and_Reinforcement_Learning.git](https://github.com/1nnovat1on/GPT-4V_and_Reinforcement_Learning.git)
 cd GPT-4V_and_Reinforcement_Learning
 \```
 
