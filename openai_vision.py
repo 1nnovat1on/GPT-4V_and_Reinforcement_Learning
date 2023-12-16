@@ -11,7 +11,6 @@ import base64
 import requests
 from typing import Tuple
 import aiohttp
-import asyncio
 
 api_key = os.getenv('OPENAI_API_KEY')
 

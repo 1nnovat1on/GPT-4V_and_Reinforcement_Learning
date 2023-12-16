@@ -1,0 +1,7 @@
+pygame
+numpy
+tensorflow
+keras
+requests
+Pillow  # PIL is part of the Pillow package
+aiohttp

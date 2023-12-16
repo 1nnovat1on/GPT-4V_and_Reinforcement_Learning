@@ -11,7 +11,6 @@ import time
 import openai_vision as eye
 import asyncio
 import json
-from collections import deque
 
 # Initialize Pygame and create a screen
 # Initialize Pygame and its display
