@@ -14,17 +14,9 @@ import json
 from collections import deque
 
 # Initialize Pygame and create a screen
-# Initialize Pygame and its display
 pygame.init()
-pygame.display.init()
-# Get the dimensions of the screen
-
-# Set up the display and get full screen dimensions
-screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
-infoObject = pygame.display.Info()
-width, height = infoObject.current_w, infoObject.current_h
-# width, height = 400, 400
-# screen = pygame.display.set_mode((width, height))
+width, height = 400, 400
+screen = pygame.display.set_mode((width, height))
 clock = pygame.time.Clock()
 font = pygame.font.SysFont(None, 36)
 
@@ -37,7 +29,7 @@ epsilon_path = 'epsilon.txt'
 # shared resources (Public)
 # Create an asyncio Queue for vision data
 vision_data_queue = asyncio.Queue()
-time_limit = 10
+time_limit = 5
 # Define a buffer to store experiences
 experience_buffer = []
 buffer_path = 'experience_buffer.json'  # File to store the experience buffer
@@ -287,7 +279,6 @@ def calculate_reward(target, agent, time_remaining, success_threshold, width, su
     inaction_penalty = -0.1  # Define the penalty for inaction
     distance_penalty_scale = 1.0  # Increase this value to make distance more impactful
 
-
     if distance < success_threshold:
         reward = 1
         successes += 1
@@ -309,6 +300,9 @@ async def main():
     
     model = initialize_model(model_path)
 
+    replay_buffer = deque(maxlen=10000) 
+    save_interval = 10  # Save every 100 episodes, adjust as needed
+
     # Main loop
     running = True
     successes = int(load_file(success_path, 0))  # Load the number of successes
@@ -318,9 +312,6 @@ async def main():
     # At the start of your main loop, initialize a list to keep track of rewards
     reward_history = []
     running_average_reward = 0
-
-    # Define a penalty for going out of bounds
-    out_of_bounds_penalty = -0.5  # less than timeout_penalty, but still a significant negative reward
 
     while running:
         attempts += 1  # Increment attempts counter
@@ -357,16 +348,28 @@ async def main():
             
             next_state = get_state(target, agent)
 
-            
-            # Check if the agent is out of bounds and apply a penalty
-            if agent[0] < 0 or agent[0] >= width or agent[1] < 0 or agent[1] >= height:
-                reward += out_of_bounds_penalty  # Apply the penalty
-                done = True  # End the episode if you want the game to end when out of bounds
-
             # Calculate reward and check if the episode is done
             reward, successes, done = calculate_reward(target, agent, remaining_time, 10, width, successes, action_taken)
 
+            # Add the experience to the replay buffer
+            replay_buffer.append((state, action, reward, next_state, done))
 
+            # Sample a minibatch from the replay buffer to train your model
+            if len(replay_buffer) >= minibatch_size:
+                minibatch = random.sample(replay_buffer, minibatch_size)
+                train_model_minibatch(*zip(*minibatch), model, minibatch_size)
+
+
+
+
+            # Periodically save the replay buffer and model
+            if attempts % save_interval == 0:
+                save_experience_buffer(list(replay_buffer))  # Convert replay_buffer to a list before saving
+                model.save(model_path)
+                save_file(success_path, successes)
+                save_file(attempts_path, attempts)
+                save_file(epsilon_path, epsilon)
+                print(f"Checkpoint saved at episode {attempts}")
 
             # Display the success ratio
             success_ratio = successes / attempts if attempts > 0 else 0
@@ -379,11 +382,9 @@ async def main():
             
             # Process Pygame events
             for event in pygame.event.get():
-                if event.type == pygame.QUIT:
+                if event.type is pygame.QUIT:
                     running = False
-                elif event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_ESCAPE:  # Press ESC to exit full screen
-                        running = False
+                    done = True
             
             
             # After updating the reward within your loop, append to reward_history and calculate running average
@@ -392,9 +393,10 @@ async def main():
                 reward_history = reward_history[1:]  # Keep only the last 100 rewards
             running_average_reward = np.mean(reward_history)
             print(f"Running Average Reward: {running_average_reward}")
-            # If the episode is done (either success or failure), train the model
-            if done:
-                train_model(state, action, reward, next_state, done, model)
+            
+            # # If the episode is done (either success or failure), train the model
+            # if done:
+            #     train_model(state, action, reward, next_state, done, model)
 
 
         
@@ -408,6 +410,7 @@ async def main():
         save_file(attempts_path, attempts)
         save_file(epsilon_path, epsilon)
 
+    save_experience_buffer(experience_buffer)
     # Quit Pygame
     pygame.quit()
     fetcher_task.cancel()
