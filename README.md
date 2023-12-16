@@ -27,24 +27,24 @@ Ensure you have Python 3.x installed on your machine. This project depends on se
 
 Clone the repository to your local machine:
 
-\```bash
+```bash
 git clone [https://github.com/1nnovat1on/GPT-4V_and_Reinforcement_Learning.git](https://github.com/1nnovat1on/GPT-4V_and_Reinforcement_Learning.git)  
 cd GPT-4V_and_Reinforcement_Learning
-\```
+```
 
 Install the required libraries:
 
-\```bash
+```bash
 pip install -r requirements.txt
-\```
+```
 
 ### Environment Variables
 
 Set the `OPENAI_API_KEY` environment variable to use the GPT-4 with Vision API:
 
-\```bash
+```bash
 export OPENAI_API_KEY=your_api_key_here
-\```
+```
 
 Replace `your_api_key_here` with your actual OpenAI API key.
 
@@ -52,9 +52,9 @@ Replace `your_api_key_here` with your actual OpenAI API key.
 
 Run the main script:
 
-\```bash
+```bash
 python main.py
-\```
+```
 
 ## Usage
 
